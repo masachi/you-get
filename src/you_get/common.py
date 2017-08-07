@@ -75,6 +75,7 @@ SITES = {
     'tumblr'           : 'tumblr',
     'twimg'            : 'twitter',
     'twitter'          : 'twitter',
+    'ucas'             : 'ucas',
     'videomega'        : 'videomega',
     'vidto'            : 'vidto',
     'vimeo'            : 'vimeo',
@@ -89,6 +90,7 @@ SITES = {
     'ximalaya'         : 'ximalaya',
     'yinyuetai'        : 'yinyuetai',
     'miaopai'          : 'yixia',
+    'yizhibo'          : 'yizhibo',
     'youku'            : 'youku',
     'youtu'            : 'youtube',
     'youtube'          : 'youtube',
@@ -136,6 +138,29 @@ if sys.stdout.isatty():
 else:
     default_encoding = locale.getpreferredencoding().lower()
 
+def rc4(key, data):
+#all encryption algo should work on bytes
+    assert type(key)==type(data) and type(key) == type(b'')
+    state = list(range(256))
+    j = 0
+    for i in range(256):
+        j += state[i] + key[i % len(key)]
+        j &= 0xff
+        state[i], state[j] = state[j], state[i]
+
+    i = 0
+    j = 0
+    out_list = []
+    for char in data:
+        i += 1
+        i &= 0xff
+        j += state[i]
+        j &= 0xff
+        state[i], state[j] = state[j], state[i]
+        prn = state[(state[i] + state[j]) & 0xff]
+        out_list.append(char ^ prn)
+
+    return bytes(out_list)
 def maybe_print(*s):
     try: print(*s)
     except: pass
@@ -278,15 +303,11 @@ def get_response(url, faker = False):
 
 # DEPRECATED in favor of get_content()
 def get_html(url, encoding = None, faker = False):
-    logging.debug('get_html: %s' % url)
-
     content = get_response(url, faker).data
     return str(content, 'utf-8', 'ignore')
 
 # DEPRECATED in favor of get_content()
 def get_decoded_html(url, faker = False):
-    logging.debug('get_decoded_html: %s' % url)
-
     response = get_response(url, faker)
     data = response.data
     charset = r1(r'charset=([\w-]+)', response.headers['content-type'])
@@ -438,6 +459,9 @@ def url_info(url, faker = False, headers = {}):
         'video/x-ms-asf': 'asf',
         'audio/mp4': 'mp4',
         'audio/mpeg': 'mp3',
+        'audio/wav': 'wav',
+        'audio/x-wav': 'wav',
+        'audio/wave': 'wav',
         'image/jpeg': 'jpg',
         'image/png': 'png',
         'image/gif': 'gif',
@@ -481,7 +505,10 @@ def url_locations(urls, faker = False, headers = {}):
         locations.append(response.url)
     return locations
 
-def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, headers = {}):
+def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, headers = {}, timeout = None, **kwargs):
+#When a referer specified with param refer, the key must be 'Referer' for the hack here
+    if refer is not None:
+        headers['Referer'] = refer
     file_size = url_size(url, faker = faker, headers = headers)
 
     if os.path.exists(filepath):
@@ -526,7 +553,10 @@ def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, h
         if refer:
             headers['Referer'] = refer
 
-        response = urlopen_with_retry(request.Request(url, headers=headers))
+        if timeout:
+            response = urlopen_with_retry(request.Request(url, headers=headers), timeout=timeout)
+        else:
+            response = urlopen_with_retry(request.Request(url, headers=headers))
         try:
             range_start = int(response.headers['content-range'][6:].split('/')[0].split('-')[0])
             end_length = int(response.headers['content-range'][6:].split('/')[1])
@@ -733,7 +763,10 @@ class DummyProgressBar:
 def get_output_filename(urls, title, ext, output_dir, merge):
     # lame hack for the --output-filename option
     global output_filename
-    if output_filename: return output_filename
+    if output_filename:
+        if ext:
+            return output_filename + '.' + ext
+        return output_filename
 
     merged_ext = ext
     if (len(urls) > 1) and merge:
@@ -790,7 +823,7 @@ def download_urls(urls, title, ext, total_size, output_dir='.', refer=None, merg
         url = urls[0]
         print('Downloading %s ...' % tr(output_filename))
         bar.update()
-        url_save(url, output_filepath, bar, refer = refer, faker = faker, headers = headers)
+        url_save(url, output_filepath, bar, refer = refer, faker = faker, headers = headers, **kwargs)
         bar.done()
     else:
         parts = []
@@ -802,7 +835,7 @@ def download_urls(urls, title, ext, total_size, output_dir='.', refer=None, merg
             parts.append(filepath)
             #print 'Downloading %s [%s/%s]...' % (tr(filename), i + 1, len(urls))
             bar.update_piece(i + 1)
-            url_save(url, filepath, bar, refer = refer, is_part = True, faker = faker, headers = headers)
+            url_save(url, filepath, bar, refer = refer, is_part = True, faker = faker, headers = headers, **kwargs)
         bar.done()
 
         if not merge:
@@ -967,7 +1000,7 @@ def download_rtmp_url(url,title, ext,params={}, total_size=0, output_dir='.', re
     assert has_rtmpdump_installed(), "RTMPDump not installed."
     download_rtmpdump_stream(url,  title, ext,params, output_dir)
 
-def download_url_ffmpeg(url,title, ext,params={}, total_size=0, output_dir='.', refer=None, merge=True, faker=False):
+def download_url_ffmpeg(url,title, ext,params={}, total_size=0, output_dir='.', refer=None, merge=True, faker=False, stream=True):
     assert url
     if dry_run:
         print('Real URL:\n%s\n' % [url])
@@ -990,7 +1023,7 @@ def download_url_ffmpeg(url,title, ext,params={}, total_size=0, output_dir='.', 
 
     title = tr(get_filename(title))
 
-    ffmpeg_download_stream(url, title, ext, params, output_dir)
+    ffmpeg_download_stream(url, title, ext, params, output_dir, stream=stream)
 
 def playlist_not_supported(name):
     def f(*args, **kwargs):
@@ -1055,6 +1088,8 @@ def print_info(site_info, title, type, size):
         type_info = "MPEG-4 audio (%s)" % type
     elif type in ['audio/mpeg']:
         type_info = "MP3 (%s)" % type
+    elif type in ['audio/wav', 'audio/wave', 'audio/x-wav']:
+        type_info = 'Waveform Audio File Format ({})'.format(type)
 
     elif type in ['image/jpeg']:
         type_info = "JPEG Image (%s)" % type
@@ -1184,16 +1219,19 @@ def script_main(script_name, download, download_playlist, **kwargs):
     -s | --socks-proxy <HOST:PORT>      Use an SOCKS5 proxy for downloading.
     -t | --timeout <SECONDS>            Set socket timeout.
     -d | --debug                        Show traceback and other debug info.
+    -I | --input-file                   Read non-playlist urls from file.
+    -P | --password <PASSWORD>          Set video visit password to PASSWORD.
     '''
 
-    short_opts = 'Vhfiuc:ndF:O:o:p:x:y:s:t:'
-    opts = ['version', 'help', 'force', 'info', 'url', 'cookies', 'no-caption', 'no-merge', 'no-proxy', 'debug', 'json', 'format=', 'stream=', 'itag=', 'output-filename=', 'output-dir=', 'player=', 'http-proxy=', 'socks-proxy=', 'extractor-proxy=', 'lang=', 'timeout=']
-    if download_playlist:
-        short_opts = 'l' + short_opts
-        opts = ['playlist'] + opts
+    short_opts = 'Vhfiuc:ndF:O:o:p:x:y:s:t:I:P:'
+    opts = ['version', 'help', 'force', 'info', 'url', 'cookies', 'no-caption', 'no-merge', 'no-proxy', 'debug', 'json', 'format=', 'stream=', 'itag=', 'output-filename=', 'output-dir=', 'player=', 'http-proxy=', 'socks-proxy=', 'extractor-proxy=', 'lang=', 'timeout=', 'input-file=', 'password=']
+#dead code? download_playlist is a function and always True
+#if download_playlist:
+    short_opts = 'l' + short_opts
+    opts = ['playlist'] + opts
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], short_opts, opts)
+        opts, args = getopt.gnu_getopt(sys.argv[1:], short_opts, opts)
     except getopt.GetoptError as err:
         log.e(err)
         log.e("try 'you-get --help' for more options")
@@ -1219,6 +1257,9 @@ def script_main(script_name, download, download_playlist, **kwargs):
     extractor_proxy = None
     traceback = False
     timeout = 600
+    urls_from_file = []
+    password = None
+
     for o, a in opts:
         if o in ('-V', '--version'):
             version()
@@ -1296,12 +1337,24 @@ def script_main(script_name, download, download_playlist, **kwargs):
             lang = a
         elif o in ('-t', '--timeout'):
             timeout = int(a)
+        elif o in ('-P', '--password',):
+            password = a
+        elif o in ('-I', '--input-file'):
+            logging.debug('you are trying to load urls from {}'.format(a))
+            if playlist:
+                log.e("reading playlist from a file is unsupported and won't make your life easier")
+                sys.exit(2)
+            with open(a, 'r') as input_file:
+                for line in input_file:
+                    url = line.strip()
+                    urls_from_file.append(url)
         else:
             log.e("try 'you-get --help' for more options")
             sys.exit(2)
-    if not args:
+    if not args and not urls_from_file:
         print(help)
         sys.exit()
+    args.extend(urls_from_file)
 
     if (socks_proxy):
         try:
@@ -1341,6 +1394,8 @@ def script_main(script_name, download, download_playlist, **kwargs):
         else:
             sys.exit(1)
     except UnicodeEncodeError:
+        if traceback:
+            raise
         log.e('[error] oops, the current environment does not seem to support Unicode.')
         log.e('please set it to a UTF-8-aware locale first,')
         log.e('so as to save the video (with some Unicode characters) correctly.')
@@ -1391,7 +1446,7 @@ def url_to_module(url):
         video_host = r1(r'https?://([^/]+)/', url)
         video_url = r1(r'https?://[^/]+(.*)', url)
 
-    if video_host.endswith('.com.cn'):
+    if video_host.endswith('.com.cn') or video_host.endswith('.ac.cn'):
         video_host = video_host[:-3]
     domain = r1(r'(\.[^.]+\.[^.]+)$', video_host) or video_host
     assert domain, 'unsupported url: ' + url

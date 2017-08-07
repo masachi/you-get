@@ -6,8 +6,6 @@ from ..common import *
 import json
 import hashlib
 import time
-import uuid
-import urllib.parse, urllib.request
 
 def douyutv_download(url, output_dir = '.', merge = True, info_only = False, **kwargs):
     html = get_content(url)
@@ -18,34 +16,23 @@ def douyutv_download(url, output_dir = '.', merge = True, info_only = False, **k
 
     json_request_url = "http://m.douyu.com/html5/live?roomId=%s" % room_id
     content = get_content(json_request_url)
-    data = json.loads(content)['data']
-    server_status = data.get('error',0)
+    json_content = json.loads(content)
+    data = json_content['data']
+    server_status = json_content.get('error',0)
     if server_status is not 0:
         raise ValueError("Server returned error:%s" % server_status)
 
-    title = data.get('room_name')
-    show_status = data.get('show_status')
+    room_info_url = "http://open.douyucdn.cn/api/RoomApi/room/%s" % room_id
+    room_info_content = get_content(room_info_url)
+    room_info_obj = json.loads(room_info_content)
+    room_info_data = room_info_obj.get('data')
+
+    title = room_info_data.get('room_name')
+    show_status = room_info_data.get('room_status')
     if show_status is not "1":
         raise ValueError("The live stream is not online! (Errno:%s)" % server_status)
 
-    tt = int(time.time() / 60)
-    did = uuid.uuid4().hex.upper()
-    sign_content = '{room_id}{did}A12Svb&%1UUmf@hC{tt}'.format(room_id = room_id, did = did, tt = tt)
-    sign = hashlib.md5(sign_content.encode('utf-8')).hexdigest()
-
-    json_request_url = "http://www.douyu.com/lapi/live/getPlay/%s" % room_id
-    payload = {'cdn': 'ws', 'rate': '0', 'tt': tt, 'did': did, 'sign': sign}
-    postdata = urllib.parse.urlencode(payload)
-    req = urllib.request.Request(json_request_url, postdata.encode('utf-8'))
-    with urllib.request.urlopen(req) as response:
-        content = response.read()
-
-    data = json.loads(content.decode('utf-8'))['data']
-    server_status = data.get('error',0)
-    if server_status is not 0:
-        raise ValueError("Server returned error:%s" % server_status)
-
-    real_url = data.get('rtmp_url')+'/'+data.get('rtmp_live')
+    real_url = data.get('hls_url')
 
     print_info(site_info, title, 'flv', float('inf'))
     if not info_only:
